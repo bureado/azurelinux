@@ -27,7 +27,7 @@
 
 Summary:        Linux Kernel
 Name:           kernel
-Version:        5.15.156.1
+Version:        5.15.155.1
 Release:        1%{?dist}
 License:        GPLv2
 Vendor:         Microsoft Corporation
