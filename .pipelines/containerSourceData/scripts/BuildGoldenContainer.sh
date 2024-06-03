@@ -28,7 +28,6 @@ set -e
 # - t) Script to create SBOM for the container image.
 # - u) Create Distroless container (e.g. true, false. If true, the script will also create a distroless container)
 # - v) Version extract command (e.g. 'busybox | head -1 | cut -c 10-15')
-# - w) Is NVIDIA image (e.g. true, false. NVIDIA images have different naming convention)
 
 # Assuming you are in your current working directory. Below should be the directory structure:
 #   │   rpms.tar.gz
@@ -58,7 +57,7 @@ set -e
 #     -j OUTPUT -k ./rpms.tar.gz -l ~/CBL-Mariner/.pipelines/containerSourceData \
 #     -m "false" -n "false" -p development -q "false" -u "true"
 
-while getopts ":a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:" OPTIONS; do
+while getopts ":a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:" OPTIONS; do
     case ${OPTIONS} in
     a ) BASE_IMAGE_NAME_FULL=$OPTARG;;
     b ) ACR=$OPTARG;;
@@ -82,7 +81,6 @@ while getopts ":a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:" OPTIONS; do
     t ) SBOM_SCRIPT=$OPTARG;;
     u ) DISTROLESS=$OPTARG;;
     v ) VERSION_EXTRACT_CMD=$OPTARG;;
-    w ) IS_NVIDIA_IMAGE=$OPTARG;;
 
     \? )
         echo "Error - Invalid Option: -$OPTARG" 1>&2
@@ -126,7 +124,6 @@ function print_inputs {
     echo "SBOM_TOOL_PATH                -> $SBOM_TOOL_PATH"
     echo "SBOM_SCRIPT                   -> $SBOM_SCRIPT"
     echo "DISTROLESS                    -> $DISTROLESS"
-    echo "IS_NVIDIA_IMAGE               -> $IS_NVIDIA_IMAGE"
 }
 
 function validate_inputs {
@@ -239,7 +236,7 @@ function prepare_dockerfile {
 
     # Update the copied dockerfile for later use in container build.
     mainRunInstruction=$(cat "$CONTAINER_SRC_DIR/Dockerfile-Initial")
-    sed -E "s#@INCLUDE_MAIN_RUN_INSTRUCTION@#$mainRunInstruction#g" -i "$WORK_DIR/dockerfile"
+    sed -E "s|@INCLUDE_MAIN_RUN_INSTRUCTION@|$mainRunInstruction|g" -i "$WORK_DIR/dockerfile"
 
     if [ -n "$DOCKERFILE_TEXT_REPLACEMENT" ]; then
         TEXT_REPLACEMENT_ARRAY=($DOCKERFILE_TEXT_REPLACEMENT)
@@ -268,31 +265,11 @@ function prepare_docker_directory {
     cp -v "$CONTAINER_SRC_DIR/marinerLocalRepo.repo" "$HOST_MOUNTED_DIR"/
 }
 
-function prepare_nvidia_docker_build {
-    echo "+++ Prepare NVIDIA docker build arguments"
-    if [ "$IMAGE" == "nvidiagpudriver" ]; then
-        export KERNEL_VERSION=$(rpm -q --qf '%{VERSION}-%{release}\n' -p $HOST_MOUNTED_DIR/RPMS/x86_64/kernel-devel*)
-        export DRIVER_VERSION=$(rpm -q --qf '%{VERSION}' -p $HOST_MOUNTED_DIR/RPMS/x86_64/cuda*)
-        export DRIVER_BRANCH="${DRIVER_VERSION%%.*}"
-        export AZURE_LINUX_VERSION=${BASE_IMAGE_TAG%.*}
-
-        DOCKER_BUILD_ARGS="--build-arg KERNEL_VERSION=$KERNEL_VERSION --build-arg DRIVER_VERSION=$DRIVER_VERSION --build-arg AZURE_LINUX_VERSION=$AZURE_LINUX_VERSION"
-    else
-        echo "Error - Unknown NVIDIA container image."
-        exit 1
-    fi
-}
-
 function docker_build {
     echo "+++ Build container"
     pushd "$WORK_DIR" > /dev/null
-    ls
     echo " docker build command"
     echo "----------------------"
-        
-    if [ "$IS_NVIDIA_IMAGE" = true ]; then
-        prepare_nvidia_docker_build
-    fi
     echo "docker buildx build $DOCKER_BUILD_ARGS" \
     "--build-arg BASE_IMAGE=$BASE_IMAGE_NAME_FULL" \
     "--build-arg RPMS_TO_INSTALL=$PACKAGES_TO_INSTALL" \
@@ -320,8 +297,6 @@ function set_image_tag {
     if [[ -n "$VERSION_EXTRACT_CMD" ]]; then
         echo "Using custom version extract command."
         COMPONENT_VERSION=$(docker exec "$containerId" sh -c "$VERSION_EXTRACT_CMD")
-    elif [ "$IS_NVIDIA_IMAGE" = true ]; then
-        echo "NVIDIA containers do not require component information"
     else
         if [[ $USE_RPM_QA_CMD =~ [Tt]rue ]] ; then
             echo "Using rpm -qa command to get installed package."
@@ -331,30 +306,22 @@ function set_image_tag {
             # exec as root as the default user for some containers is non-root
             installedPackage=$(docker exec -u 0 "$containerId" tdnf repoquery --installed "$COMPONENT" | grep ^"$COMPONENT")
         fi
-        echo "Full Installed/Downloaded Package:       -> $installedPackage"
+        echo "Full Installed Package:       -> $installedPackage"
         COMPONENT_VERSION=$(echo "$installedPackage" | awk '{n=split($0,a,"-")};{split(a[n],b,".")}; {print a[n-1]"-"b[1]}') # 16.16.0-1
     fi
 
     echo "Component Version             -> $COMPONENT_VERSION"
+    docker rm -f "$containerId"
 
     # Rename the image to include package version
     # For HCI Images, do not include "-$DISTRO_IDENTIFIER" in the image tag; Instead use a "."
     if [ "$IS_HCI_IMAGE" = true ]; then
         # Example: acrafoimages.azurecr.io/base/kubevirt/virt-operator:0.59.0-2.2.0.20230607-amd64
         GOLDEN_IMAGE_NAME_FINAL="$GOLDEN_IMAGE_NAME:$COMPONENT_VERSION.$BASE_IMAGE_TAG"
-    elif [ "$IS_NVIDIA_IMAGE" = true ]; then
-        # Example: azurelinuxpreview.azurecr.io/base/driver:550-5.15.153.1-1.cm2-mariner2.0
-        # Fetch the ID and VERSION_ID from /etc/os-release file
-        ID=$(docker exec -u 0 "$containerId" cat /etc/os-release | grep "^ID=" | cut -d'=' -f2)
-        VERSION_ID=$(docker exec -u 0 "$containerId" cat /etc/os-release | grep "^VERSION_ID=" | cut -d'=' -f2 | sed -e 's/^"//' -e 's/"$//')
-        OS_TAG=$ID$VERSION_ID
-        GOLDEN_IMAGE_NAME_FINAL="$GOLDEN_IMAGE_NAME:$DRIVER_BRANCH-$KERNEL_VERSION-$OS_TAG"
     else
         # Example: azurelinuxpreview.azurecr.io/base/nodejs:16.19.1-2-$DISTRO_IDENTIFIER2.0.20230607-amd64
         GOLDEN_IMAGE_NAME_FINAL="$GOLDEN_IMAGE_NAME:$COMPONENT_VERSION-$DISTRO_IDENTIFIER$BASE_IMAGE_TAG"
     fi
-
-    docker rm -f "$containerId"
 }
 
 function finalize {
