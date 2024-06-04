@@ -1,0 +1,348 @@
+From 154512c2098a71b48f77c8129d6eb4834fa300f6 Mon Sep 17 00:00:00 2001
+From: Rachel Menge <rachelmenge@microsoft.com>
+Date: Mon, 3 Jun 2024 20:32:47 -0400
+Subject: [PATCH] Revert "net: dsa: mt7530: fix enabling EEE on MT7531 switch
+ on all boards"
+
+This reverts commit d564809f27eae6fac3d3a5c5415b795c5b5887b5.
+
+Revert "net: dsa: mt7530: fix improper frames on all 25MHz and 40MHz XTAL MT7530"
+
+This reverts commit eb6535c6f7c222bebc76b4205f6c5135fbb59c63.
+
+Revert "net: dsa: introduce preferred_default_local_cpu_port and use on MT7530"
+
+This reverts commit 63ba7a80d6e2932bc98f21cfd8cb8c098e70145e.
+
+Revert "net: dsa: mt7530: set all CPU ports in MT7531_CPU_PMAP"
+
+This reverts commit 84b7f50e631aa6bdda1ba618b0e4aad4d75256d8.
+
+Revert "net: ethernet: ti: am65-cpsw-nuss: cleanup DMA Channels before using them"
+
+This reverts commit 831157756e3ce29f64019041eaeb5d4e8a131fbb.
+
+Revert "net: dsa: mt7530: fix mirroring frames received on local port"
+
+This reverts commit 9495b7a412e30249360db191b4350c3829d6a781.
+
+Revert "tun: limit printing rate when illegal packet received by tun dev"
+
+This reverts commit a50dbeca28acf7051dfa92786b85f704c75db6eb.
+---
+ drivers/net/dsa/mt7530.c                 | 60 +++++++-----------------
+ drivers/net/dsa/mt7530.h                 |  6 ---
+ drivers/net/ethernet/ti/am65-cpsw-nuss.c | 18 -------
+ drivers/net/tun.c                        | 18 ++++---
+ include/net/dsa.h                        |  8 ----
+ net/dsa/dsa2.c                           | 24 +---------
+ 6 files changed, 25 insertions(+), 109 deletions(-)
+
+diff --git a/drivers/net/dsa/mt7530.c b/drivers/net/dsa/mt7530.c
+index 86db6a18c837..f291d1e70f80 100644
+--- a/drivers/net/dsa/mt7530.c
++++ b/drivers/net/dsa/mt7530.c
+@@ -415,20 +415,6 @@ static void mt7530_pll_setup(struct mt7530_priv *priv)
+ 	core_set(priv, CORE_TRGMII_GSW_CLK_CG, REG_GSWCK_EN);
+ }
+ 
+-/* If port 6 is available as a CPU port, always prefer that as the default,
+- * otherwise don't care.
+- */
+-static struct dsa_port *
+-mt753x_preferred_default_local_cpu_port(struct dsa_switch *ds)
+-{
+-	struct dsa_port *cpu_dp = dsa_to_port(ds, 6);
+-
+-	if (dsa_port_is_cpu(cpu_dp))
+-		return cpu_dp;
+-
+-	return NULL;
+-}
+-
+ /* Setup port 6 interface mode and TRGMII TX circuit */
+ static int
+ mt7530_pad_clk_setup(struct dsa_switch *ds, phy_interface_t interface)
+@@ -1246,13 +1232,6 @@ mt753x_cpu_port_enable(struct dsa_switch *ds, int port)
+ 	if (priv->id == ID_MT7530 || priv->id == ID_MT7621)
+ 		mt7530_rmw(priv, MT7530_MFC, CPU_MASK, CPU_EN | CPU_PORT(port));
+ 
+-	/* Add the CPU port to the CPU port bitmap for MT7531. Trapped frames
+-	 * will be forwarded to the CPU port that is affine to the inbound user
+-	 * port.
+-	 */
+-	if (priv->id == ID_MT7531)
+-		mt7530_set(priv, MT7531_CFC, MT7531_CPU_PMAP(BIT(port)));
+-
+ 	/* CPU port gets connected to all user ports of
+ 	 * the switch.
+ 	 */
+@@ -2410,6 +2389,8 @@ mt7530_setup(struct dsa_switch *ds)
+ 		     SYS_CTRL_PHY_RST | SYS_CTRL_SW_RST |
+ 		     SYS_CTRL_REG_RST);
+ 
++	mt7530_pll_setup(priv);
++
+ 	/* Lower Tx driving for TRGMII path */
+ 	for (i = 0; i < NUM_TRGMII_CTRL; i++)
+ 		mt7530_write(priv, MT7530_TRGMII_TD_ODT(i),
+@@ -2427,9 +2408,6 @@ mt7530_setup(struct dsa_switch *ds)
+ 
+ 	priv->p6_interface = PHY_INTERFACE_MODE_NA;
+ 
+-	if ((val & HWTRAP_XTAL_MASK) == HWTRAP_XTAL_40MHZ)
+-		mt7530_pll_setup(priv);
+-
+ 	mt753x_trap_frames(priv);
+ 
+ 	/* Enable and reset MIB counters */
+@@ -2459,9 +2437,6 @@ mt7530_setup(struct dsa_switch *ds)
+ 			   PVC_EG_TAG(MT7530_VLAN_EG_CONSISTENT));
+ 	}
+ 
+-	/* Allow mirroring frames received on the local port (monitor port). */
+-	mt7530_set(priv, MT753X_AGC, LOCAL_EN);
+-
+ 	/* Setup VLAN ID 0 for VLAN-unaware bridges */
+ 	ret = mt7530_setup_vlan0(priv);
+ 	if (ret)
+@@ -2532,8 +2507,16 @@ static int
+ mt7531_setup_common(struct dsa_switch *ds)
+ {
+ 	struct mt7530_priv *priv = ds->priv;
++	struct dsa_port *cpu_dp;
+ 	int ret, i;
+ 
++	/* BPDU to CPU port */
++	dsa_switch_for_each_cpu_port(cpu_dp, ds) {
++		mt7530_rmw(priv, MT7531_CFC, MT7531_CPU_PMAP_MASK,
++			   BIT(cpu_dp->index));
++		break;
++	}
++
+ 	mt753x_trap_frames(priv);
+ 
+ 	/* Enable and reset MIB counters */
+@@ -2570,9 +2553,6 @@ mt7531_setup_common(struct dsa_switch *ds)
+ 			   PVC_EG_TAG(MT7530_VLAN_EG_CONSISTENT));
+ 	}
+ 
+-	/* Allow mirroring frames received on the local port (monitor port). */
+-	mt7530_set(priv, MT753X_AGC, LOCAL_EN);
+-
+ 	/* Flush the FDB table */
+ 	ret = mt7530_fdb_cmd(priv, MT7530_FDB_FLUSH, NULL);
+ 	if (ret < 0)
+@@ -2587,7 +2567,7 @@ mt7531_setup(struct dsa_switch *ds)
+ 	struct mt7530_priv *priv = ds->priv;
+ 	struct mt7530_dummy_poll p;
+ 	u32 val, id;
+-	int ret, i;
++	int ret;
+ 
+ 	/* Reset whole chip through gpio pin or memory-mapped registers for
+ 	 * different type of hardware
+@@ -2647,25 +2627,18 @@ mt7531_setup(struct dsa_switch *ds)
+ 	priv->p5_interface = PHY_INTERFACE_MODE_NA;
+ 	priv->p6_interface = PHY_INTERFACE_MODE_NA;
+ 
+-	/* Enable Energy-Efficient Ethernet (EEE) and PHY core PLL, since
+-	 * phy_device has not yet been created provided for
+-	 * phy_[read,write]_mmd_indirect is called, we provide our own
+-	 * mt7531_ind_mmd_phy_[read,write] to complete this function.
++	/* Enable PHY core PLL, since phy_device has not yet been created
++	 * provided for phy_[read,write]_mmd_indirect is called, we provide
++	 * our own mt7531_ind_mmd_phy_[read,write] to complete this
++	 * function.
+ 	 */
+ 	val = mt7531_ind_c45_phy_read(priv, MT753X_CTRL_PHY_ADDR,
+ 				      MDIO_MMD_VEND2, CORE_PLL_GROUP4);
+-	val |= MT7531_RG_SYSPLL_DMY2 | MT7531_PHY_PLL_BYPASS_MODE;
++	val |= MT7531_PHY_PLL_BYPASS_MODE;
+ 	val &= ~MT7531_PHY_PLL_OFF;
+ 	mt7531_ind_c45_phy_write(priv, MT753X_CTRL_PHY_ADDR, MDIO_MMD_VEND2,
+ 				 CORE_PLL_GROUP4, val);
+ 
+-	/* Disable EEE advertisement on the switch PHYs. */
+-	for (i = MT753X_CTRL_PHY_ADDR;
+-	     i < MT753X_CTRL_PHY_ADDR + MT7530_NUM_PHYS; i++) {
+-		mt7531_ind_c45_phy_write(priv, i, MDIO_MMD_AN, MDIO_AN_EEE_ADV,
+-					 0);
+-	}
+-
+ 	mt7531_setup_common(ds);
+ 
+ 	/* Setup VLAN ID 0 for VLAN-unaware bridges */
+@@ -3403,7 +3376,6 @@ static int mt753x_set_mac_eee(struct dsa_switch *ds, int port,
+ static const struct dsa_switch_ops mt7530_switch_ops = {
+ 	.get_tag_protocol	= mtk_get_tag_protocol,
+ 	.setup			= mt753x_setup,
+-	.preferred_default_local_cpu_port = mt753x_preferred_default_local_cpu_port,
+ 	.get_strings		= mt7530_get_strings,
+ 	.get_ethtool_stats	= mt7530_get_ethtool_stats,
+ 	.get_sset_count		= mt7530_get_sset_count,
+diff --git a/drivers/net/dsa/mt7530.h b/drivers/net/dsa/mt7530.h
+index 4a013680ce64..299a26ad5809 100644
+--- a/drivers/net/dsa/mt7530.h
++++ b/drivers/net/dsa/mt7530.h
+@@ -32,10 +32,6 @@ enum mt753x_id {
+ #define SYSC_REG_RSTCTRL		0x34
+ #define  RESET_MCM			BIT(2)
+ 
+-/* Register for ARL global control */
+-#define MT753X_AGC			0xc
+-#define  LOCAL_EN			BIT(7)
+-
+ /* Registers to mac forward control for unknown frames */
+ #define MT7530_MFC			0x10
+ #define  BC_FFP(x)			(((x) & 0xff) << 24)
+@@ -58,7 +54,6 @@ enum mt753x_id {
+ #define  MT7531_MIRROR_PORT_GET(x)	(((x) >> 16) & MIRROR_MASK)
+ #define  MT7531_MIRROR_PORT_SET(x)	(((x) & MIRROR_MASK) << 16)
+ #define  MT7531_CPU_PMAP_MASK		GENMASK(7, 0)
+-#define  MT7531_CPU_PMAP(x)		FIELD_PREP(MT7531_CPU_PMAP_MASK, x)
+ 
+ #define MT753X_MIRROR_REG(id)		(((id) == ID_MT7531) ? \
+ 					 MT7531_CFC : MT7530_MFC)
+@@ -673,7 +668,6 @@ enum mt7531_clk_skew {
+ #define  RG_SYSPLL_DDSFBK_EN		BIT(12)
+ #define  RG_SYSPLL_BIAS_EN		BIT(11)
+ #define  RG_SYSPLL_BIAS_LPF_EN		BIT(10)
+-#define  MT7531_RG_SYSPLL_DMY2		BIT(6)
+ #define  MT7531_PHY_PLL_OFF		BIT(5)
+ #define  MT7531_PHY_PLL_BYPASS_MODE	BIT(4)
+ 
+diff --git a/drivers/net/ethernet/ti/am65-cpsw-nuss.c b/drivers/net/ethernet/ti/am65-cpsw-nuss.c
+index 4bd57b79a023..f94d6d322df4 100644
+--- a/drivers/net/ethernet/ti/am65-cpsw-nuss.c
++++ b/drivers/net/ethernet/ti/am65-cpsw-nuss.c
+@@ -2535,8 +2535,6 @@ static void am65_cpsw_unregister_devlink(struct am65_cpsw_common *common)
+ 
+ static int am65_cpsw_nuss_register_ndevs(struct am65_cpsw_common *common)
+ {
+-	struct am65_cpsw_rx_chn *rx_chan = &common->rx_chns;
+-	struct am65_cpsw_tx_chn *tx_chan = common->tx_chns;
+ 	struct device *dev = common->dev;
+ 	struct devlink_port *dl_port;
+ 	struct am65_cpsw_port *port;
+@@ -2555,22 +2553,6 @@ static int am65_cpsw_nuss_register_ndevs(struct am65_cpsw_common *common)
+ 		return ret;
+ 	}
+ 
+-	/* The DMA Channels are not guaranteed to be in a clean state.
+-	 * Reset and disable them to ensure that they are back to the
+-	 * clean state and ready to be used.
+-	 */
+-	for (i = 0; i < common->tx_ch_num; i++) {
+-		k3_udma_glue_reset_tx_chn(tx_chan[i].tx_chn, &tx_chan[i],
+-					  am65_cpsw_nuss_tx_cleanup);
+-		k3_udma_glue_disable_tx_chn(tx_chan[i].tx_chn);
+-	}
+-
+-	for (i = 0; i < AM65_CPSW_MAX_RX_FLOWS; i++)
+-		k3_udma_glue_reset_rx_chn(rx_chan->rx_chn, i, rx_chan,
+-					  am65_cpsw_nuss_rx_cleanup, !!i);
+-
+-	k3_udma_glue_disable_rx_chn(rx_chan->rx_chn);
+-
+ 	ret = am65_cpsw_nuss_register_devlink(common);
+ 	if (ret)
+ 		return ret;
+diff --git a/drivers/net/tun.c b/drivers/net/tun.c
+index f0e34b2b072e..42bf0a3ec632 100644
+--- a/drivers/net/tun.c
++++ b/drivers/net/tun.c
+@@ -2096,16 +2096,14 @@ static ssize_t tun_put_user(struct tun_struct *tun,
+ 					    tun_is_little_endian(tun), true,
+ 					    vlan_hlen)) {
+ 			struct skb_shared_info *sinfo = skb_shinfo(skb);
+-
+-			if (net_ratelimit()) {
+-				netdev_err(tun->dev, "unexpected GSO type: 0x%x, gso_size %d, hdr_len %d\n",
+-					   sinfo->gso_type, tun16_to_cpu(tun, gso.gso_size),
+-					   tun16_to_cpu(tun, gso.hdr_len));
+-				print_hex_dump(KERN_ERR, "tun: ",
+-					       DUMP_PREFIX_NONE,
+-					       16, 1, skb->head,
+-					       min((int)tun16_to_cpu(tun, gso.hdr_len), 64), true);
+-			}
++			pr_err("unexpected GSO type: "
++			       "0x%x, gso_size %d, hdr_len %d\n",
++			       sinfo->gso_type, tun16_to_cpu(tun, gso.gso_size),
++			       tun16_to_cpu(tun, gso.hdr_len));
++			print_hex_dump(KERN_ERR, "tun: ",
++				       DUMP_PREFIX_NONE,
++				       16, 1, skb->head,
++				       min((int)tun16_to_cpu(tun, gso.hdr_len), 64), true);
+ 			WARN_ON_ONCE(1);
+ 			return -EINVAL;
+ 		}
+diff --git a/include/net/dsa.h b/include/net/dsa.h
+index e57d6e65f27e..bec439c4a085 100644
+--- a/include/net/dsa.h
++++ b/include/net/dsa.h
+@@ -705,14 +705,6 @@ struct dsa_switch_ops {
+ 			       struct phy_device *phy);
+ 	void	(*port_disable)(struct dsa_switch *ds, int port);
+ 
+-	/*
+-	 * Compatibility between device trees defining multiple CPU ports and
+-	 * drivers which are not OK to use by default the numerically smallest
+-	 * CPU port of a switch for its local ports. This can return NULL,
+-	 * meaning "don't know/don't care".
+-	 */
+-	struct dsa_port *(*preferred_default_local_cpu_port)(struct dsa_switch *ds);
+-
+ 	/*
+ 	 * Port's MAC EEE settings
+ 	 */
+diff --git a/net/dsa/dsa2.c b/net/dsa/dsa2.c
+index 543834e31298..9751bee3fb2f 100644
+--- a/net/dsa/dsa2.c
++++ b/net/dsa/dsa2.c
+@@ -386,24 +386,6 @@ static int dsa_tree_setup_default_cpu(struct dsa_switch_tree *dst)
+ 	return 0;
+ }
+ 
+-static struct dsa_port *
+-dsa_switch_preferred_default_local_cpu_port(struct dsa_switch *ds)
+-{
+-	struct dsa_port *cpu_dp;
+-
+-	if (!ds->ops->preferred_default_local_cpu_port)
+-		return NULL;
+-
+-	cpu_dp = ds->ops->preferred_default_local_cpu_port(ds);
+-	if (!cpu_dp)
+-		return NULL;
+-
+-	if (WARN_ON(!dsa_port_is_cpu(cpu_dp) || cpu_dp->ds != ds))
+-		return NULL;
+-
+-	return cpu_dp;
+-}
+-
+ /* Perform initial assignment of CPU ports to user ports and DSA links in the
+  * fabric, giving preference to CPU ports local to each switch. Default to
+  * using the first CPU port in the switch tree if the port does not have a CPU
+@@ -411,16 +393,12 @@ dsa_switch_preferred_default_local_cpu_port(struct dsa_switch *ds)
+  */
+ static int dsa_tree_setup_cpu_ports(struct dsa_switch_tree *dst)
+ {
+-	struct dsa_port *preferred_cpu_dp, *cpu_dp, *dp;
++	struct dsa_port *cpu_dp, *dp;
+ 
+ 	list_for_each_entry(cpu_dp, &dst->ports, list) {
+ 		if (!dsa_port_is_cpu(cpu_dp))
+ 			continue;
+ 
+-		preferred_cpu_dp = dsa_switch_preferred_default_local_cpu_port(cpu_dp->ds);
+-		if (preferred_cpu_dp && preferred_cpu_dp != cpu_dp)
+-			continue;
+-
+ 		list_for_each_entry(dp, &dst->ports, list) {
+ 			/* Prefer a local CPU port */
+ 			if (dp->ds != cpu_dp->ds)
+-- 
+2.34.1
+
