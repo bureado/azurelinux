@@ -110,6 +110,7 @@ kubernetes installation with kubectl apply.
 # to be 'physically' placed into the proper location.
 %setup -q -n go/src/kubevirt.io/%{name} -c -T
 tar --strip-components=1 -xf %{SOURCE0}
+%autopatch -p1
 
 %build
 
