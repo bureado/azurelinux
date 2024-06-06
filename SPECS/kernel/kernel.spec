@@ -40,7 +40,7 @@ Source2:        config_aarch64
 Source3:        sha512hmac-openssl.sh
 Source4:        cbl-mariner-ca-20211013.pem
 Patch0:         nvme_multipath_default_false.patch
-Patch1:         0001-Revert-net-dsa-mt7530-fix-enabling-EEE-on-MT7531-swi.patch
+Patch1:         0001-Revert-netfilter-br_netfilter-skip-conntrack-input-h.patch
 BuildRequires:  audit-devel
 BuildRequires:  bash
 BuildRequires:  bc
