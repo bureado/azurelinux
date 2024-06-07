@@ -1,0 +1,24 @@
+From 06a60b2d25dd6eb5b85c861a2d76e25f126cc83d Mon Sep 17 00:00:00 2001
+From: Rachel Menge <rachelmenge@microsoft.com>
+Date: Fri, 7 Jun 2024 12:06:38 -0400
+Subject: [PATCH] Patch pid namespaces to not hang
+
+---
+ kernel/pid_namespace.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/pid_namespace.c b/kernel/pid_namespace.c
+index 259fc4ca0d9c..40b011f88067 100644
+--- a/kernel/pid_namespace.c
++++ b/kernel/pid_namespace.c
+@@ -214,6 +214,7 @@ void zap_pid_ns_processes(struct pid_namespace *pid_ns)
+ 	 */
+ 	do {
+ 		clear_thread_flag(TIF_SIGPENDING);
++		clear_thread_flag(TIF_NOTIFY_SIGNAL);
+ 		rc = kernel_wait4(-1, NULL, __WALL, NULL);
+ 	} while (rc != -ECHILD);
+ 
+-- 
+2.34.1
+
