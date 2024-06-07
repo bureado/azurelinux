@@ -10,7 +10,7 @@
 Summary:        Main C library
 Name:           glibc
 Version:        2.38
-Release:        5%{?dist}
+Release:        300%{?dist}
 License:        BSD AND GPLv2+ AND Inner-Net AND ISC AND LGPLv2+ AND MIT
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
@@ -31,8 +31,8 @@ Patch3:         CVE-2020-1751.nopatch
 Patch4:         CVE-2018-20796.nopatch
 Patch5:         https://www.linuxfromscratch.org/patches/downloads/glibc/glibc-2.38-memalign_fix-1.patch
 # Patches for testing
-Patch100:       nscd_do_not_rebuild_getaddrinfo.patch
-Patch101:       0001-Remove-Wno-format-cflag.patch
+#Patch100:       nscd_do_not_rebuild_getaddrinfo.patch
+Patch101:       0001-Remove-Wno-format-cflag-from-tests.patch
 BuildRequires:  bison
 BuildRequires:  gawk
 BuildRequires:  gettext
